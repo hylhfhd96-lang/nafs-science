@@ -1630,6 +1630,8 @@ const Sync = {
   setQueue(q){ try{ localStorage.setItem(this.qkey,JSON.stringify(q)); }catch(e){} },
   line(r){
     const when = new Date(r.ts).toLocaleString('ar-EG');
+    const c=v=>String(v==null?'':v).replace(/\s*\|\s*/g,' / ').replace(/[\r\n]+/g,' ').trim();
+    if(r.type==='note') return ['ملاحظة', r.kind, c(r.name), c(r.text), r.ts, r.device].join(' | ');
     if(r.type==='result') return ['نتيجة', r.name||'-', r.test, r.score20+'/20', r.correct+'/'+r.total, r.level, when, r.device].join(' | ');
     return ['دخول', r.role==='guest'?'زائرة':'طالبة', when, r.device].join(' | ');
   },
@@ -1654,8 +1656,8 @@ const Sync = {
   async fetchCloud(){
     if(!PUB_CSV) return null;
     const r = await fetch(PUB_CSV+(PUB_CSV.includes('?')?'&':'?')+'t='+Date.now()); const rows=this.csv(await r.text()).slice(1);
-    const out={students:0,guests:0,results:[]};
-    rows.forEach(x=>{ const p=(x[1]||'').split(' | ').map(v=>v.trim()); if(p[0]==='دخول'){ if(p[1]==='زائرة') out.guests++; else out.students++; } else if(p[0]==='نتيجة'){ out.results.push({name:p[1],test:p[2],score:p[3],level:p[5],when:p[6]}); } });
+    const out={students:0,guests:0,results:[],notes:{comment:[],opinion:[],impact:[]}};
+    rows.forEach(x=>{ const p=(x[1]||'').split(' | ').map(v=>v.trim()); if(p[0]==='دخول'){ if(p[1]==='زائرة') out.guests++; else out.students++; } else if(p[0]==='ملاحظة'){ if(out.notes[p[1]]) out.notes[p[1]].push({name:p[2],text:p[3],date:p[4]}); } else if(p[0]==='نتيجة'){ out.results.push({name:p[1],test:p[2],score:p[3],level:p[5],when:p[6]}); } });
     this.cloud=out; App.renderCounters(false); return out;
   },
   async loadPanel(p){
@@ -1748,9 +1750,9 @@ const App = {
     if(screen==='home'){ this.refreshHomeGreeting(); this.renderWeeklyChart(); Game.paintTotals(); }
     if(screen==='stats'){ this.renderStats(); }
     if(screen==='tests'){ this.renderTests(); }
-    if(screen==='opinions'){ this.renderFeed('opinions'); }
-    if(screen==='comments'){ this.renderFeed('comments'); }
-    if(screen==='impact'){ this.renderFeed('impact'); }
+    if(screen==='opinions'){ this.renderFeed('opinions'); Sync.fetchCloud().then(()=>this.renderFeed('opinions')).catch(()=>{}); }
+    if(screen==='comments'){ this.renderFeed('comments'); Sync.fetchCloud().then(()=>this.renderFeed('comments')).catch(()=>{}); }
+    if(screen==='impact'){ this.renderFeed('impact'); Sync.fetchCloud().then(()=>this.renderFeed('impact')).catch(()=>{}); }
     if(screen==='certificate'){ this.renderCertificate(); }
     if(screen==='game'){ Game.renderMap(); }
     if(screen==='favorites'){ this.renderFavorites(); }
@@ -2063,7 +2065,14 @@ const App = {
                  opinions:{key:DB.keys.opinions, el:'opinions-feed', empty:'لا توجد آراء حالياً', emptySub:'سيتم عرض آراء أولياء الأمور هنا بمجرد إضافتها'},
                  impact:{key:DB.keys.impact, el:'impact-feed', empty:'لا توجد ملاحظات بعد', emptySub:'سيتم عرض أثر القياس هنا بمجرد إضافته'}};
     const conf = map[type];
-    const data = DB.get(conf.key, []);
+    let data = DB.get(conf.key, []);
+    const kind = {comments:'comment',opinions:'opinion',impact:'impact'}[type];
+    const cl = (typeof Sync!=='undefined' && Sync.cloud) ? Sync.cloud.notes[kind] : null;
+    if(cl){
+      const norm=v=>String(v||'').replace(/\s*\|\s*/g,' / ').replace(/[\r\n]+/g,' ').trim();
+      const extra = data.filter(d=>!cl.some(c=>c.text===norm(d.text)));
+      data = cl.concat(extra).sort((a,b)=>new Date(a.date)-new Date(b.date));
+    }
     const wrap = document.getElementById(conf.el);
     if(data.length===0){
       wrap.innerHTML = `<div class="empty-wrap" style="padding-top:60px;"><div class="empty-icon">${ICONS.ICON_CHAT}</div><div class="empty-title">${conf.empty}</div><div class="empty-sub">${conf.emptySub}</div></div>`;
@@ -2096,6 +2105,7 @@ const App = {
     if(this.modalMode==='opinion'){ key=DB.keys.opinions; screenType='opinions'; }
     if(this.modalMode==='impact'){ key=DB.keys.impact; screenType='impact'; }
     const arr = DB.get(key, []);
+    Sync.send('note',{kind:this.modalMode,name:(this.modalMode==='impact'?'':name),text});
     arr.push(entry); // append-only — nothing is ever removed from this list by app UI
     DB.set(key, arr);
     this.closeModal();
