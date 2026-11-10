@@ -900,6 +900,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       <div class="big" id="c-total">0</div>
     </div>
     <div class="counter-note">العدّاد ثابت لا يُصفَّر ولا يُحذف، ويسجّل كل دخول فور حدوثه.</div>
+    <div class="counter-note" id="cloud-status" style="font-weight:700"></div>
   </div>
 
   <!-- ============ TESTS LIST ============ -->
@@ -1621,6 +1622,10 @@ const WEEKDAYS = ['السبت','الأحد','الاثنين','الثلاثاء',
    ============================================================ */
 const FORM_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSd_7MEB5uaSvPkAMFfb9m5chSXXREWaXqAPh9dk3ww-0G_FpA/formResponse';
 const FORM_ENTRY = 'entry.1305858587';
+/* الاختبارات المفتوحة حالياً (غيّري القائمة لفتح غيرها) */
+const OPEN_TESTS = ['t1','t2','t3'];
+/* عدد مستويات اللعبة المفتوحة للجميع من البداية */
+const OPEN_LEVELS = 3;
 const PUB_CSV = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQKz9rpSGuS5_kOjJDuWOyuiayqoTbF43VH8dX0pDV26L8Z0FoiYGr8100ccWGzg6SWWrTSAaEL-zRn/pub?gid=1388024774&single=true&output=csv';
 const SHEET_URL = 'https://docs.google.com/spreadsheets/d/1X4jNgSbSv2_vxZRepJrQ19weMai0NyN17SUIF7JCqRA/edit';
 const Sync = {
@@ -1652,13 +1657,35 @@ const Sync = {
   },
   openSheet(){ window.open(SHEET_URL,'_blank'); },
   csv(t){ const rows=[]; let r=[],c='',q=false; for(let i=0;i<t.length;i++){ const ch=t[i]; if(q){ if(ch=='"'){ if(t[i+1]=='"'){c+='"';i++;} else q=false; } else c+=ch; } else if(ch=='"') q=true; else if(ch==','){ r.push(c); c=''; } else if(ch=='\n'){ r.push(c); rows.push(r); r=[]; c=''; } else if(ch!='\r') c+=ch; } if(c||r.length){ r.push(c); rows.push(r);} return rows; },
-  cloud:null,
+  cloud:(function(){ try{ const c=JSON.parse(localStorage.getItem('nafs_science_cloudCache')||'null'); return c&&c.notes?c:null; }catch(e){ return null; } })(),
   async fetchCloud(){
     if(!PUB_CSV) return null;
-    const r = await fetch(PUB_CSV+(PUB_CSV.includes('?')?'&':'?')+'t='+Date.now()); const rows=this.csv(await r.text()).slice(1);
+    let rows;
+    try{
+      const r = await fetch(PUB_CSV+(PUB_CSV.includes('?')?'&':'?')+'t='+Date.now(), {cache:'no-store'});
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      rows=this.csv(await r.text()).slice(1);
+      this.status={ok:true,time:new Date(),n:rows.length};
+    }catch(e){
+      this.status={ok:false,time:new Date(),msg:String(e&&e.message||e)};
+      this.showStatus(); throw e;
+    }
     const out={students:0,guests:0,results:[],notes:{comment:[],opinion:[],impact:[]}};
     rows.forEach(x=>{ const p=(x[1]||'').split(' | ').map(v=>v.trim()); if(p[0]==='دخول'){ if(p[1]==='زائرة') out.guests++; else out.students++; } else if(p[0]==='ملاحظة'){ if(out.notes[p[1]]) out.notes[p[1]].push({name:p[2],text:p[3],date:p[4]}); } else if(p[0]==='نتيجة'){ out.results.push({name:p[1],test:p[2],score:p[3],level:p[5],when:p[6]}); } });
-    this.cloud=out; App.renderCounters(false); return out;
+    // لا ننزل أبداً عن آخر عدد محفوظ (ثبات العدّادات)
+    const old=this.cloud;
+    if(old){ out.students=Math.max(out.students,old.students||0); out.guests=Math.max(out.guests,old.guests||0);
+      ['comment','opinion','impact'].forEach(k=>{ if((old.notes[k]||[]).length>out.notes[k].length) out.notes[k]=old.notes[k]; });
+      if((old.results||[]).length>out.results.length) out.results=old.results; }
+    this.cloud=out; try{ localStorage.setItem('nafs_science_cloudCache',JSON.stringify(out)); }catch(e){}
+    App.renderCounters(false); this.showStatus(); return out;
+  },
+  showStatus(){
+    const el=document.getElementById('cloud-status'); if(!el) return;
+    const s=this.status; if(!s){ el.textContent=''; return; }
+    const t=s.time.toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit'});
+    el.textContent = s.ok ? ('متصل بالجدول ✓ · '+s.n+' سجل · آخر تحديث '+t) : ('تعذّر الاتصال بالجدول ('+s.msg+') · يعرض آخر بيانات محفوظة');
+    el.style.color = s.ok ? '#2E7D32' : '#C62828';
   },
   async loadPanel(p){
     const st=document.getElementById(p+'-cloud-state'), box=document.getElementById(p+'-cloud-list');
@@ -1935,6 +1962,8 @@ const App = {
 
   /* ---------------- Tests list ---------------- */
   testStatus(t){
+    if(OPEN_TESTS.includes(t.id)) return 'active';
+    if(OPEN_TESTS.length) return 'upcoming';
     const now = new Date();
     const start = new Date(t.startDate);
     const end = new Date(start.getTime() + t.durationDays*24*60*60*1000);
@@ -1993,7 +2022,7 @@ const App = {
     const status = this.testStatus(t);
     const attempts = DB.get(DB.keys.attempts,{});
     if(status!=='active'){
-      alert(status==='upcoming' ? 'هذا الاختبار لم يبدأ بعد.' : 'انتهت فترة هذا الاختبار (15 يوماً).');
+      alert(status==='upcoming' ? 'هذا الاختبار غير مفتوح حالياً.' : 'انتهت فترة هذا الاختبار (15 يوماً).');
       return;
     }
     if(attempts[t.id]){
@@ -2346,7 +2375,7 @@ const Game = {
   totalPts(){ return Object.values(this.ptsMap()).reduce((a,b)=>a+(+b||0),0); },
   paintPts(){ const e=document.getElementById('gp-pts'); if(e) e.textContent='النقاط: '+this.pts; },
   totalStars(){ const s=this.stars(); return Object.values(s).reduce((a,b)=>a+(+b||0),0); },
-  unlocked(i){ return i===0 || (this.stars()[i-1]||0) > 0; },
+  unlocked(i){ return i<OPEN_LEVELS || (this.stars()[i-1]||0) > 0; },
   paintTotals(){
     const t = '★ ' + this.totalStars() + ' من 30';
     const a = document.getElementById('game-stars-total'); if(a) a.textContent = t;
