@@ -968,6 +968,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       <div class="topbar-title">أثر القياس</div>
       <div style="width:38px;"></div>
     </div>
+    <div class="card" id="impact-chart" style="margin:6px 16px 10px;"></div>
     <div class="filters-row" style="padding-bottom:4px;"><div class="pill">كل الملاحظات ${'{{ICON_CHEVRON}}'}</div></div>
     <div class="feed" id="impact-feed"></div>
     <button class="floatbtn" onclick="App.openFormModal('impact')">${'{{ICON_PLUS}}'}</button>
@@ -1623,7 +1624,7 @@ const WEEKDAYS = ['السبت','الأحد','الاثنين','الثلاثاء',
 const FORM_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSd_7MEB5uaSvPkAMFfb9m5chSXXREWaXqAPh9dk3ww-0G_FpA/formResponse';
 const FORM_ENTRY = 'entry.1305858587';
 /* الاختبارات المفتوحة حالياً (غيّري القائمة لفتح غيرها) */
-const OPEN_TESTS = ['t1','t2','t3'];
+const OPEN_TESTS = ['t1','t2','t3','t4','t5','t6'];
 /* عدد مستويات اللعبة المفتوحة للجميع من البداية */
 const OPEN_LEVELS = 3;
 const PUB_CSV = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQKz9rpSGuS5_kOjJDuWOyuiayqoTbF43VH8dX0pDV26L8Z0FoiYGr8100ccWGzg6SWWrTSAaEL-zRn/pub?gid=1388024774&single=true&output=csv';
@@ -1779,7 +1780,7 @@ const App = {
     if(screen==='tests'){ this.renderTests(); }
     if(screen==='opinions'){ this.renderFeed('opinions'); Sync.fetchCloud().then(()=>this.renderFeed('opinions')).catch(()=>{}); }
     if(screen==='comments'){ this.renderFeed('comments'); Sync.fetchCloud().then(()=>this.renderFeed('comments')).catch(()=>{}); }
-    if(screen==='impact'){ this.renderFeed('impact'); Sync.fetchCloud().then(()=>this.renderFeed('impact')).catch(()=>{}); }
+    if(screen==='impact'){ this.renderFeed('impact'); this.renderImpactChart(); Sync.fetchCloud().then(()=>{ this.renderFeed('impact'); this.renderImpactChart(); }).catch(()=>{}); }
     if(screen==='certificate'){ this.renderCertificate(); }
     if(screen==='game'){ Game.renderMap(); }
     if(screen==='favorites'){ this.renderFavorites(); }
@@ -2089,6 +2090,39 @@ const App = {
   },
 
   /* ---------------- Comments / Opinions / Impact (never deletable) ---------------- */
+  renderImpactChart(){
+    const el=document.getElementById('impact-chart'); if(!el) return;
+    const tests=DB.get(DB.keys.tests,[]);
+    let rows=[];
+    if(Sync.cloud && Sync.cloud.results.length){
+      rows=Sync.cloud.results.map(r=>({test:r.test,s:parseFloat(String(r.score).split('/')[0]),level:r.level})).filter(r=>!isNaN(r.s));
+    } else {
+      const at=DB.get(DB.keys.attempts,{});
+      rows=Object.keys(at).map(id=>{ const t=tests.find(x=>x.id===id); const a=at[id]; return {test:t?t.title:id,s:(a.score20!==undefined?a.score20:this.scoreOf20(a.correct,a.total)),level:a.level}; });
+    }
+    if(!rows.length){ el.innerHTML='<div class="card-title">قياس الأثر</div><div class="list-sub" style="padding:10px 0">لا توجد نتائج بعد. سيظهر الرسم البياني بمجرد أن تحل الطالبات الاختبارات.</div>'; return; }
+    const order=tests.map(t=>t.title); const g={};
+    rows.forEach(r=>{ (g[r.test]=g[r.test]||{n:0,sum:0}); g[r.test].n++; g[r.test].sum+=r.s; });
+    const names=Object.keys(g).sort((a,b)=>{ const ia=order.indexOf(a), ib=order.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib); });
+    const avgAll=(rows.reduce((a,r)=>a+r.s,0)/rows.length);
+    const best=names.map(n=>({n,v:g[n].sum/g[n].n})).sort((a,b)=>b.v-a.v)[0];
+    const W=320,H=170,pl=26,pb=34,pt=14, bw=Math.min(28,(W-pl-8)/names.length-8);
+    const step=(W-pl-8)/names.length;
+    let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="متوسط الدرجات لكل اختبار">`;
+    [0,5,10,15,20].forEach(v=>{ const y=pt+(H-pt-pb)*(1-v/20); svg+=`<line x1="${pl}" x2="${W-4}" y1="${y}" y2="${y}" stroke="#E0E6E1" stroke-width="1"/><text x="${pl-4}" y="${y+3}" font-size="8" fill="#7A8A7E" text-anchor="end">${v}</text>`; });
+    names.forEach((n,i)=>{ const v=g[n].sum/g[n].n, h=(H-pt-pb)*(v/20), x=W-8-step*(i+1)+(step-bw)/2, y=H-pb-h; const m=(n.match(/\d+/)||[n])[0];
+      svg+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="5" fill="#43A047"/><text x="${x+bw/2}" y="${y-3}" font-size="9" font-weight="700" fill="#1B5E20" text-anchor="middle">${v.toFixed(1)}</text><text x="${x+bw/2}" y="${H-pb+13}" font-size="9" fill="#37474F" text-anchor="middle">${m}</text><text x="${x+bw/2}" y="${H-pb+24}" font-size="8" fill="#7A8A7E" text-anchor="middle">(${g[n].n})</text>`; });
+    svg+='</svg>';
+    const lv={}; rows.forEach(r=>{ if(r.level) lv[r.level]=(lv[r.level]||0)+1; });
+    const lvHtml=Object.keys(lv).map(k=>{ const pc=Math.round(lv[k]/rows.length*100); return `<div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12px"><span style="width:84px;font-weight:700">${k}</span><div style="flex:1;background:#E8F5E9;border-radius:8px;height:10px;overflow:hidden"><div style="width:${pc}%;height:100%;background:#2E7D32"></div></div><span style="width:34px;text-align:left">${pc}%</span></div>`; }).join('');
+    el.innerHTML=`<div class="card-title">قياس الأثر · متوسط الدرجات (من 20)</div>
+      <div style="display:flex;gap:8px;margin:8px 0 4px">
+        <div style="flex:1;background:#E8F5E9;border-radius:12px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:800;color:#1B5E20">${rows.length}</div><div style="font-size:10px">عدد المحاولات</div></div>
+        <div style="flex:1;background:#E8F5E9;border-radius:12px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:800;color:#1B5E20">${avgAll.toFixed(1)}</div><div style="font-size:10px">المتوسط العام</div></div>
+        <div style="flex:1;background:#E8F5E9;border-radius:12px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:800;color:#1B5E20">${(best.n.match(/\d+/)||[best.n])[0]}</div><div style="font-size:10px">أعلى اختبار</div></div>
+      </div>${svg}<div class="list-sub" style="text-align:center;margin-bottom:6px">رقم الاختبار (عدد المحاولات)</div>
+      <div class="card-title" style="font-size:13px;margin-top:4px">توزيع المستويات</div>${lvHtml}`;
+  },
   renderFeed(type){
     const map = {comments:{key:DB.keys.comments, el:'comments-feed', empty:'لا توجد تعليقات بعد', emptySub:'سيتم عرض التعليقات هنا بمجرد إضافتها'},
                  opinions:{key:DB.keys.opinions, el:'opinions-feed', empty:'لا توجد آراء حالياً', emptySub:'سيتم عرض آراء أولياء الأمور هنا بمجرد إضافتها'},
